@@ -2797,7 +2797,10 @@ void RollbackLobbyDialog::onRoomJoinFailed(const QString& reason)
     else if (reason == "already_started") human = "That game has already started.";
     else if (reason == "already_in_room") human = "You're already in a room.";
     else if (reason == "room_not_found")  human = "That room no longer exists.";
-    else if (reason == "kicked_recently") human = "You were recently removed from this room. Try again in a moment.";
+    else if (reason == "kicked_from_room") human =
+        "You were removed from this room and cannot rejoin while it exists.";
+    else if (reason == "kicked_recently") human =
+        "You were recently removed from this room. Try again in a moment.";
     QMessageBox::warning(this, "Couldn't join room", human);
 }
 
