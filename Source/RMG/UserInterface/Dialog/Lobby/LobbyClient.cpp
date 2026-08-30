@@ -2894,12 +2894,15 @@ void LobbyClient::startRoom()
     sendEnvelope("ROOM_START");
 }
 
-void LobbyClient::updateLocalFrameDelay(int delay, bool delayAuto)
+void LobbyClient::updateLocalRollbackSettings(int delay, bool delayAuto,
+                                              int prediction, bool predictionAuto)
 {
     QJsonObject d;
     d["delay"] = delay;
     d["delayAuto"] = delayAuto;
-    sendEnvelope("ROOM_UPDATE_DELAY", d);
+    d["prediction"] = prediction;
+    d["predictionAuto"] = predictionAuto;
+    sendEnvelope("ROOM_UPDATE_PLAYER_SETTINGS", d);
 }
 
 void LobbyClient::kickFromRoom(quint64 userId)
