@@ -89,7 +89,7 @@ private:
     QString m_romRegion;
     int     m_maxPlayers = 2;
     int     m_delay      = 2;
-    int     m_prediction = 7;
+    int     m_prediction = 9;
     QString m_password;
 };
 
