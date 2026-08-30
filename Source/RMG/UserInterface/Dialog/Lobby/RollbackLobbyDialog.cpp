@@ -2169,7 +2169,7 @@ void RollbackLobbyDialog::onHelloFailed(const QString& reason)
     else if (reason == "invalid_hello") human = "Server rejected the connection handshake.";
     else if (reason == "invalid_payload") human = "That username isn't allowed.";
     else if (reason == "version_mismatch") human =
-        "Your RMG-K client is out of date. This lobby requires RMG-K 9.13 "
+        "Your RMG-K client is out of date. This lobby requires RMG-K 0.9.13 "
         "or vdev-2367 or newer.";
     else if (reason == "server_full") human = "The lobby is currently full.";
 

@@ -329,6 +329,8 @@ private:
     void handleIceSignal(const QJsonObject& data);
     void reconcileIcePeers(const QJsonObject& roomState);
     void resetIceMesh();
+    bool restartIcePeer(quint64 userId, quint32 generation,
+                        const QString& reason, bool notifyPeer);
     void flushIceEvents();
     void sendIcePing(quint64 userId, quint64 nonce);
     void sendRoomPingReport(quint64 targetUserId, int rttMs);
@@ -425,6 +427,11 @@ private:
     quint64 m_currentIceHostUserId = 0;
     QSet<quint64> m_icePeerIds;
     QHash<quint64, int> m_lastIceStates;
+    // Every restart replaces both libjuice agents for this pair. Generations
+    // scope trickled signals so candidates delayed from an old WebSocket
+    // session cannot be applied to the fresh credentials and UDP socket.
+    QHash<quint64, quint32> m_iceGenerations;
+    QHash<quint64, int> m_iceRestartAttempts;
     // Host-only matrix for non-host paths. To avoid duplicate reports, only
     // the lower user id measures/reports each unordered pair.
     QHash<quint64, QHash<quint64, int>> m_roomPeerPings;
