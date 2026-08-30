@@ -318,7 +318,7 @@ namespace
     // Shown before the first ping can be sent. ICE negotiation may take a few
     // seconds on restrictive NATs, so leaving this cell blank makes a healthy
     // connection look stalled.
-    QString seatIceStatusHtml(int attempt = 1, int maxAttempts = 5)
+    QString seatIceStatusHtml(int attempt = 1, int maxAttempts = 20)
     {
         const auto c = statusColors();
         return QString("<span style='color:%1; font-weight:600;'>Connection attempt %2/%3…</span>")
@@ -1281,7 +1281,7 @@ void RollbackLobbyDialog::renderSeatEmpty(SeatRow& s)
     s.frameDelay = -1;
     s.predictionWindow = -1;
     s.iceAttempt = 1;
-    s.iceMaxAttempts = 5;
+    s.iceMaxAttempts = 20;
 
     // Muted, dashed card — clearly "open seat" without competing with the
     // filled, color-tinted player cards.
@@ -3084,7 +3084,7 @@ void RollbackLobbyDialog::onRoomStateChanged(const QJsonObject& roomState)
         if (m_seats[slot - 1].userId != uid)
         {
             m_seats[slot - 1].iceAttempt = 1;
-            m_seats[slot - 1].iceMaxAttempts = 5;
+            m_seats[slot - 1].iceMaxAttempts = 20;
         }
         m_seats[slot - 1].userId = uid;
         renderSeatFilled(m_seats[slot - 1], user, slotIsHost, slotIsSelf,

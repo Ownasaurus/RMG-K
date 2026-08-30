@@ -271,7 +271,7 @@ private:
         int      frameDelay = -1;          // published local input delay
         int      predictionWindow = -1;    // published local prediction window
         int      iceAttempt = 1;            // current ICE generation, one-based
-        int      iceMaxAttempts = 5;
+        int      iceMaxAttempts = 20;
     };
     void buildSeatRow(SeatRow& row, int slotIdx, QWidget* parent);
     void renderSeatEmpty(SeatRow& row);

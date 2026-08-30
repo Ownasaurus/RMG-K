@@ -111,10 +111,10 @@ namespace
     constexpr quint8 ICE_PING_OP_REPORT  = 3;
     constexpr int ICE_PING_PACKET_SIZE = 1 + int(sizeof(quint64));
     constexpr int ICE_PING_REPORT_SIZE = 1 + int(sizeof(quint64)) + int(sizeof(quint16));
-    // Five three-second ICE generations give each peer pair up to 15 seconds.
+    // Twenty three-second ICE generations give each peer pair up to 60 seconds.
     // Every failed generation gets fresh credentials and a different local UDP
-    // port; only the fifth failure reaches the UI.
-    constexpr int MAX_ICE_AUTO_RESTARTS = 4;
+    // port; only the twentieth failure reaches the UI.
+    constexpr int MAX_ICE_AUTO_RESTARTS = 19;
     constexpr int MAX_ICE_CONNECTION_ATTEMPTS = MAX_ICE_AUTO_RESTARTS + 1;
 
     QString iceStateName(int state)
