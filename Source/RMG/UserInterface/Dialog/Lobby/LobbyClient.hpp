@@ -260,6 +260,7 @@ signals:
     // true only while a validated direct candidate pair is usable; `failed`
     // distinguishes an exhausted ICE attempt from one still in progress.
     void icePeerConnectionChanged(quint64 targetUserId, bool connected, bool failed);
+    void icePeerConnectionAttemptChanged(quint64 targetUserId, int attempt, int maxAttempts);
     // The host received a fresh RTT for a path between two other players.
     void roomPingMeasurementsChanged();
     // A burst went unanswered and we're sending another. `attempt` is 1-based

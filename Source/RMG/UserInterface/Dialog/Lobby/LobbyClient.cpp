@@ -115,6 +115,7 @@ namespace
     // Every failed generation gets fresh credentials and a different local UDP
     // port; only the fifth failure reaches the UI.
     constexpr int MAX_ICE_AUTO_RESTARTS = 4;
+    constexpr int MAX_ICE_CONNECTION_ATTEMPTS = MAX_ICE_AUTO_RESTARTS + 1;
 
     QString iceStateName(int state)
     {
@@ -971,6 +972,9 @@ void LobbyClient::reconcileIcePeers(const QJsonObject& roomState)
             if (LobbyIce::add_peer(userId))
             {
                 m_icePeerIds.insert(userId);
+                emit icePeerConnectionAttemptChanged(
+                    userId, m_iceRestartAttempts.value(userId, 0) + 1,
+                    MAX_ICE_CONNECTION_ATTEMPTS);
                 writePingDiagnostic(QStringLiteral("ICE_PEER_ADDED"),
                                     QStringLiteral("peer=%1 room=%2")
                                         .arg(pingUserLabel(userId)).arg(roomId));
@@ -1121,6 +1125,9 @@ bool LobbyClient::restartIcePeer(quint64 userId, quint32 generation,
     m_iceGenerations[userId] = generation;
     m_iceRestartAttempts[userId] = m_iceRestartAttempts.value(userId, 0) + 1;
     m_lastIceStates.remove(userId);
+    emit icePeerConnectionAttemptChanged(
+        userId, m_iceRestartAttempts.value(userId) + 1,
+        MAX_ICE_CONNECTION_ATTEMPTS);
 
     for (auto it = m_pendingProbes.begin(); it != m_pendingProbes.end();)
     {

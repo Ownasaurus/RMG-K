@@ -170,6 +170,7 @@ private slots:
     // Punch progress for a seated peer, so a slow or failing NAT punch is
     // visible in the room rather than looking like a stalled Start button.
     void onIcePeerConnectionChanged(quint64 userId, bool connected, bool failed);
+    void onIcePeerConnectionAttemptChanged(quint64 userId, int attempt, int maxAttempts);
     void onRoomPingMeasurementsChanged();
     void onPingProbeRetrying(quint64 userId, int attempt, int maxAttempts);
     void onPingProbeFailed(quint64 userId);
@@ -269,6 +270,8 @@ private:
         int      slot      = 0;           // 1-4, drives the per-player accent color
         int      frameDelay = -1;          // published local input delay
         int      predictionWindow = -1;    // published local prediction window
+        int      iceAttempt = 1;            // current ICE generation, one-based
+        int      iceMaxAttempts = 5;
     };
     void buildSeatRow(SeatRow& row, int slotIdx, QWidget* parent);
     void renderSeatEmpty(SeatRow& row);

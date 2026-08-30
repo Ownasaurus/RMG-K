@@ -318,11 +318,11 @@ namespace
     // Shown before the first ping can be sent. ICE negotiation may take a few
     // seconds on restrictive NATs, so leaving this cell blank makes a healthy
     // connection look stalled.
-    QString seatIceStatusHtml()
+    QString seatIceStatusHtml(int attempt = 1, int maxAttempts = 5)
     {
         const auto c = statusColors();
-        return QString("<span style='color:%1; font-weight:600;'>establishing connection…</span>")
-                   .arg(c.wait);
+        return QString("<span style='color:%1; font-weight:600;'>Connection attempt %2/%3…</span>")
+                   .arg(c.wait).arg(attempt).arg(maxAttempts);
     }
 
     QString seatIceFailedStatusHtml()
@@ -540,6 +540,8 @@ RollbackLobbyDialog::RollbackLobbyDialog(QWidget* parent)
     connect(m_client, &LobbyClient::matchPeerLeft,        this, &RollbackLobbyDialog::onMatchPeerLeft);
     connect(m_client, &LobbyClient::icePeerConnectionChanged,
             this, &RollbackLobbyDialog::onIcePeerConnectionChanged);
+    connect(m_client, &LobbyClient::icePeerConnectionAttemptChanged,
+            this, &RollbackLobbyDialog::onIcePeerConnectionAttemptChanged);
     connect(m_client, &LobbyClient::roomPingMeasurementsChanged,
             this, &RollbackLobbyDialog::onRoomPingMeasurementsChanged);
     connect(m_client, &LobbyClient::pingProbeMeasured,    this, &RollbackLobbyDialog::onPingMeasured);
@@ -1278,6 +1280,8 @@ void RollbackLobbyDialog::renderSeatEmpty(SeatRow& s)
     s.userId = 0;
     s.frameDelay = -1;
     s.predictionWindow = -1;
+    s.iceAttempt = 1;
+    s.iceMaxAttempts = 5;
 
     // Muted, dashed card — clearly "open seat" without competing with the
     // filled, color-tinted player cards.
@@ -2798,7 +2802,7 @@ void RollbackLobbyDialog::onRoomJoinFailed(const QString& reason)
     else if (reason == "already_in_room") human = "You're already in a room.";
     else if (reason == "room_not_found")  human = "That room no longer exists.";
     else if (reason == "kicked_from_room") human =
-        "You were removed from this room and cannot rejoin while it exists.";
+        "You were removed from this room and cannot rejoin.";
     else if (reason == "kicked_recently") human =
         "You were recently removed from this room. Try again in a moment.";
     QMessageBox::warning(this, "Couldn't join room", human);
@@ -3077,6 +3081,11 @@ void RollbackLobbyDialog::onRoomStateChanged(const QJsonObject& roomState)
             : p.value("predictionWindow").toInt(legacyRoomPrediction);
         // The host can remove any seated player except themselves (the host seat).
         const bool canKick = iAmHost && !slotIsHost;
+        if (m_seats[slot - 1].userId != uid)
+        {
+            m_seats[slot - 1].iceAttempt = 1;
+            m_seats[slot - 1].iceMaxAttempts = 5;
+        }
         m_seats[slot - 1].userId = uid;
         renderSeatFilled(m_seats[slot - 1], user, slotIsHost, slotIsSelf,
                          pingMs, frameDelay, predictionWindow, canKick);
@@ -3084,7 +3093,8 @@ void RollbackLobbyDialog::onRoomStateChanged(const QJsonObject& roomState)
             m_seats[slot - 1].metaLabel->setText(
                 seatMetaHtml(slot, slotIsHost, pingMs, frameDelay, predictionWindow,
                              isDarkTheme(),
-                             seatIceStatusHtml()));
+                             seatIceStatusHtml(m_seats[slot - 1].iceAttempt,
+                                               m_seats[slot - 1].iceMaxAttempts)));
         filled[slot - 1] = true;
     }
     for (int i = 0; i < 4; ++i)
@@ -3372,9 +3382,37 @@ void RollbackLobbyDialog::onIcePeerConnectionChanged(quint64 userId, bool connec
     // Once ICE connects, probe immediately rather than waiting up to three
     // seconds for the periodic refresh timer.
     else if (m_client->measuredPingMs(userId) < 0)
-        refreshSeatMeta(userId, seatIceStatusHtml());
+    {
+        for (const auto& seat : m_seats)
+        {
+            if (seat.userId != userId)
+                continue;
+            refreshSeatMeta(userId,
+                seatIceStatusHtml(seat.iceAttempt, seat.iceMaxAttempts));
+            break;
+        }
+    }
     if (connected)
         m_client->requestPingProbe(userId);
+}
+
+void RollbackLobbyDialog::onIcePeerConnectionAttemptChanged(
+    quint64 userId, int attempt, int maxAttempts)
+{
+    if (!m_client || userId == m_client->selfUserId())
+        return;
+    for (auto& seat : m_seats)
+    {
+        if (seat.userId != userId)
+            continue;
+        seat.iceMaxAttempts = std::max(1, maxAttempts);
+        seat.iceAttempt = std::clamp(attempt, 1, seat.iceMaxAttempts);
+        // A fresh ICE generation invalidates the usefulness of any cached ping
+        // until this new path connects and is measured.
+        refreshSeatMeta(userId,
+            seatIceStatusHtml(seat.iceAttempt, seat.iceMaxAttempts));
+        break;
+    }
 }
 
 void RollbackLobbyDialog::onRoomPingMeasurementsChanged()
