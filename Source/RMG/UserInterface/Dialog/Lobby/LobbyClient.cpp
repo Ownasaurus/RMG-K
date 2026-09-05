@@ -750,6 +750,7 @@ void LobbyClient::handleEnvelope(const QJsonObject& env)
     else if (type == "SPECTATE_KEYFRAME")    handleSpectateKeyframe(data);
     else if (type == "SPECTATE_END")         handleSpectateEnd(data);
     else if (type == "SPECTATE_FAIL")        handleSpectateFail(data);
+    else if (type == "BROADCAST_VIEWER_COUNT") handleBroadcastViewerCount(data);
     else if (type == "ADMIN_AUTH_OK")        handleAdminAuthOk(data);
     else if (type == "ADMIN_AUTH_FAIL")      handleAdminAuthFail(data);
     else if (type == "MOD_NOTICE")           handleModNotice(data);
@@ -1808,8 +1809,11 @@ void LobbyClient::handleSpectateData(const QJsonObject& data)
     const quint64 matchId = static_cast<quint64>(data.value("matchId").toDouble());
     const QByteArray raw = QByteArray::fromBase64(data.value("data").toString().toLatin1());
     const int liveFrame = data.value("frame").toInt();
+    const qint64 offset = data.contains("offset")
+        ? static_cast<qint64>(data.value("offset").toDouble())
+        : -1;
     if (!raw.isEmpty())
-        emit spectateData(matchId, raw, liveFrame);
+        emit spectateData(matchId, raw, liveFrame, offset);
 }
 
 void LobbyClient::handleSpectateKeyframe(const QJsonObject& data)
@@ -1863,6 +1867,13 @@ void LobbyClient::handleSpectateFail(const QJsonObject& data)
 {
     emit spectateFailed(static_cast<quint64>(data.value("matchId").toDouble()),
                         data.value("reason").toString());
+}
+
+void LobbyClient::handleBroadcastViewerCount(const QJsonObject& data)
+{
+    const quint64 matchId = static_cast<quint64>(data.value("matchId").toDouble());
+    const int viewerCount = qMax(0, data.value("viewerCount").toInt());
+    emit broadcastViewerCount(matchId, viewerCount);
 }
 
 // -------- Heartbeat --------

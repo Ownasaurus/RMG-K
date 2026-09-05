@@ -3452,15 +3452,53 @@ void MainWindow::timerEvent(QTimerEvent *event)
                 this->stopLobbySpectate();
                 return;
             }
+            const int behind = n02::playbackGetBufferedFrames();
+
+            // player_MPV blocks the emulation thread when no fresh input is
+            // available. Keep it paused until a full ten-second cushion has
+            // accumulated, and make that intentional stall visible even though
+            // no new video frames can be presented while the core is waiting.
+            if (n02::playbackIsBuffering())
+            {
+                if (!this->ui_SpectateBuffering)
+                {
+                    if (!this->ui_SpectateFastForward)
+                        this->ui_SpectateSavedTitle = this->windowTitle();
+                    this->ui_SpectateBuffering = true;
+                }
+                this->ui_SpectateFastForward = false;
+                this->ui_SpectateBannerPending = false;
+                CoreSetFrameOutput(CoreFrameOutput_All);
+                if (CoreGetSpeedFactor() != 100)
+                    CoreSetSpeedFactor(100);
+
+                constexpr int barW = 18;
+                int pct = 100 * behind / n02::LIVE_REPLAY_BUFFER_FRAMES;
+                if (pct < 0) pct = 0;
+                if (pct > 100) pct = 100;
+                const int filled = pct * barW / 100;
+                const double seconds = behind / 60.0;
+                std::string msg = "Buffering live replay  [" + std::string(filled, '#') +
+                                  std::string(barW - filled, '-') + "]  " +
+                                  std::to_string(static_cast<int>(seconds + 0.5)) + "/10s";
+                this->setWindowTitle(QString::fromStdString(msg));
+                return;
+            }
+            if (this->ui_SpectateBuffering)
+            {
+                this->ui_SpectateBuffering = false;
+                this->setWindowTitle(this->ui_SpectateSavedTitle);
+            }
+
             // Fast-forward while there's buffered krec ahead of us, then settle near
             // the buffered/live edge. We measure "behind" as buffered-but-unplayed
             // frames (LOCAL to this stream) rather than the broadcaster's global live
-            // frame: in the keyframe path the krec tail starts at the keyframe frame,
+            // frame: in the keyframe path the krec tail starts at the keyframe's
+            // next input,
             // so the global stamp is far ahead of our local numbering and would never
             // let us settle. Local buffered-remaining is correct for both paths.
-            const int settle   = 90;  // once catching up, stop ~1.5 s behind the edge
-            const int reengage = 240; // but don't RE-start catch-up until ~4 s behind
-            const int behind   = n02::playbackGetTotalFrames() - n02::playbackGetCurrentFrame();
+            const int settle   = n02::LIVE_REPLAY_BUFFER_FRAMES;       // stay ~10 s behind
+            const int reengage = n02::LIVE_REPLAY_BUFFER_FRAMES + 300; // re-catch at ~15 s
 
             // Hysteresis: engage catch-up only when we're well behind, then run
             // until we're close. Without the gap, normal live-stream jitter near
@@ -4254,6 +4292,7 @@ void MainWindow::on_Lobby_SpectateLaunch(quint64 matchId, QString gameName)
     this->ui_SpectateMatchId   = matchId;
     this->ui_SpectateLiveFrame = 0; // updated from broadcaster-stamped SPECTATE_DATA
     this->ui_SpectateNamesShown = false; // set once the krec header arrives
+    this->ui_SpectateExpectedOffset = 0;
     CoreClearSpectateKeyframe(); // drop any stale keyframe from a previous spectate
 
     // ~60 Hz: drive the playback state machine + fast-forward.
@@ -4263,16 +4302,31 @@ void MainWindow::on_Lobby_SpectateLaunch(quint64 matchId, QString gameName)
     OnScreenDisplaySetMessage(("Watching: " + gameName.toStdString()).c_str());
 }
 
-void MainWindow::on_Lobby_SpectateData(QByteArray bytes, int liveFrame)
+void MainWindow::on_Lobby_SpectateData(QByteArray bytes, int liveFrame, qint64 offset)
 {
     if (!this->ui_SpectateActive || bytes.isEmpty())
     {
+        return;
+    }
+    // New servers stamp every data chunk with its logical byte offset. A gap or
+    // duplicate means the krec record stream is no longer trustworthy; stop
+    // before appending malformed bytes or advancing emulation with shifted input.
+    // offset < 0 preserves compatibility with older servers during rollout.
+    if (offset >= 0 && offset != this->ui_SpectateExpectedOffset)
+    {
+        const QString reason = QStringLiteral(
+            "Live replay data gap detected (expected byte %1, received %2). Playback was stopped to prevent desync.")
+            .arg(this->ui_SpectateExpectedOffset)
+            .arg(offset);
+        this->stopLobbySpectate();
+        this->showErrorMessage(QStringLiteral("Live Replay Error"), reason);
         return;
     }
     // Track the broadcaster's live edge (monotonic) — the fast-forward target.
     if (liveFrame > this->ui_SpectateLiveFrame)
         this->ui_SpectateLiveFrame = liveFrame;
     n02::playbackAppendBytes(bytes.constData(), static_cast<int>(bytes.size()));
+    this->ui_SpectateExpectedOffset += bytes.size();
 
 #ifdef _WIN32
     // The krec header carries the slot-ordered player names; once it has been
@@ -4295,9 +4349,10 @@ void MainWindow::on_Lobby_SpectateKeyframe(int frame, QByteArray savestate)
     }
     // Stage the broadcaster's savestate so the spectator's emulation restores it (on
     // its emulation thread) before consuming the first krec input. This arrives ahead
-    // of the SPECTATE_DATA krec tail (which starts at this frame), so it's staged
+    // of the SPECTATE_DATA krec tail (whose first record is identified by frame),
+    // so it's staged
     // before the emulation even starts — the load wins the race against the first poll
-    // and the replay continues from frame F's state instead of boot.
+    // and the replay continues from the captured state instead of boot.
     CoreStageSpectateKeyframe(reinterpret_cast<const unsigned char*>(savestate.constData()),
                               static_cast<int>(savestate.size()), frame);
 }
@@ -4308,6 +4363,13 @@ void MainWindow::on_Lobby_SpectateClosed(QString reason)
     this->stopLobbySpectate();
 }
 
+void MainWindow::on_Lobby_LiveReplayViewerCountChanged(int viewerCount, bool isBroadcaster)
+{
+    const std::string role = isBroadcaster ? "Live Replay" : "Watching Live";
+    const std::string noun = viewerCount == 1 ? " viewer" : " viewers";
+    OnScreenDisplaySetLiveReplayStatus(role + " | " + std::to_string(viewerCount) + noun);
+}
+
 void MainWindow::stopLobbySpectate()
 {
     if (!this->ui_SpectateActive)
@@ -4316,17 +4378,20 @@ void MainWindow::stopLobbySpectate()
     }
     this->ui_SpectateActive  = false; // set first so re-entry (via stop→finish) bails
     this->ui_SpectateMatchId = 0;
+    this->ui_SpectateExpectedOffset = 0;
     if (this->ui_SpectateTimerId != 0)
     {
         this->killTimer(this->ui_SpectateTimerId);
         this->ui_SpectateTimerId = 0;
     }
-    if (this->ui_SpectateFastForward) // stopped mid-catch-up — put the title back
+    if (this->ui_SpectateFastForward || this->ui_SpectateBuffering)
         this->setWindowTitle(this->ui_SpectateSavedTitle);
     this->ui_SpectateFastForward = false;
+    this->ui_SpectateBuffering = false;
     this->ui_SpectateBannerPending = false;
     CoreClearSpectateKeyframe(); // drop any staged keyframe
     OnScreenDisplaySetCenterMessage(""); // clear the buffering banner if we stop mid-catch-up
+    OnScreenDisplaySetLiveReplayStatus("");
     CoreSetSpeedFactor(100);
     CoreSetFrameOutput(CoreFrameOutput_All); // undo any headless catch-up state
     n02::playbackStopStream();
@@ -4771,6 +4836,10 @@ void MainWindow::ensureRollbackLobbyDialog()
             this, &MainWindow::on_Lobby_SpectateKeyframe);
     connect(this->rollbackLobbyDialog, &Dialog::RollbackLobbyDialog::spectateStreamClosed,
             this, &MainWindow::on_Lobby_SpectateClosed);
+    connect(this->rollbackLobbyDialog, &Dialog::RollbackLobbyDialog::liveReplayViewerCountChanged,
+            this, &MainWindow::on_Lobby_LiveReplayViewerCountChanged);
+    connect(this->rollbackLobbyDialog, &Dialog::RollbackLobbyDialog::liveReplayViewerCountCleared,
+            this, []() { OnScreenDisplaySetLiveReplayStatus(""); });
 }
 #endif
 

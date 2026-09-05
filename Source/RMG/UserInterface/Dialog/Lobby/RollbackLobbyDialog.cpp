@@ -669,6 +669,7 @@ RollbackLobbyDialog::RollbackLobbyDialog(QWidget* parent)
     connect(m_client, &LobbyClient::spectateKeyframe,     this, &RollbackLobbyDialog::onSpectateKeyframe);
     connect(m_client, &LobbyClient::spectateEnded,        this, &RollbackLobbyDialog::onSpectateEnded);
     connect(m_client, &LobbyClient::spectateFailed,       this, &RollbackLobbyDialog::onSpectateFailed);
+    connect(m_client, &LobbyClient::broadcastViewerCount, this, &RollbackLobbyDialog::onBroadcastViewerCount);
 
     // Drains staged krec bytes to the WebSocket while broadcasting. ~80 ms keeps
     // WS frame overhead low without adding meaningful latency to spectators.
@@ -2432,6 +2433,7 @@ void RollbackLobbyDialog::onClientStateChanged(LobbyClient::ConnectionState s)
     if (s == LobbyClient::ConnectionState::Disconnected ||
         s == LobbyClient::ConnectionState::Failed)
     {
+        emit liveReplayViewerCountCleared();
         m_playersTree->clear();
         m_roomsTree->clear();
         m_matchesTree->clear();
@@ -4371,6 +4373,7 @@ void RollbackLobbyDialog::startBroadcast(quint64 matchId)
     });
     m_client->sendBroadcastBegin(matchId);
     m_broadcastDrainTimer->start();
+    emit liveReplayViewerCountChanged(0, true);
     appendChatSystemLine(CHANNEL_ROOM, "Live Replay on — others can watch this match.");
 }
 
@@ -4386,6 +4389,7 @@ void RollbackLobbyDialog::stopBroadcast()
     if (m_broadcastMatchId != 0)
         m_client->sendBroadcastEnd(m_broadcastMatchId);
     m_broadcastMatchId = 0;
+    emit liveReplayViewerCountCleared();
     QMutexLocker lock(&m_broadcastMutex);
     m_broadcastBuf.clear();
 }
@@ -4417,34 +4421,25 @@ void RollbackLobbyDialog::onBroadcastDrainTick()
         m_client->sendBroadcastData(m_broadcastMatchId, chunk, n02::recordingFrameCount());
     }
 
-    // Periodic savestate keyframe: ask the engine for one at a fixed interval (it
-    // snapshots + holds it until confirmed against rollback), then poll for the
-    // result and upload it so late spectators can jump near the live edge instead
-    // of replaying from frame 0. Runs even when no krec chunk drained this tick.
-    //
-    // EXPERIMENT (2026-06-29): keyframes disabled to measure pure replay-from-frame-0.
-    // With no keyframe uploaded, the server falls back to streaming the full spool from
-    // frame 0 (broadcast.go spectateStart), so the spectator replays the whole match
-    // (deterministic — boot-replay RNG is correct) and fast-forwards. Tests whether
-    // video-on catch-up is fast enough to make keyframes unnecessary. Flip to re-enable.
-    constexpr bool kSpectateKeyframesEnabled = false;
-    if (kSpectateKeyframesEnabled)
+    // Keep a recent, rollback-confirmed keyframe on the server so late viewers
+    // start from a short tail instead of replaying from frame zero. Ten seconds
+    // also matches the viewer's input cushion: a very fresh keyframe waits for
+    // its tail to reach that cushion, while an older one only fast-forwards the
+    // small excess. Runs even when no krec chunk drained this tick.
+    constexpr qint64 kKeyframeIntervalMs = 10'000;
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_lastKeyframeRequestMs == 0 || nowMs - m_lastKeyframeRequestMs >= kKeyframeIntervalMs)
     {
-        const qint64 kKeyframeIntervalMs = 60000; // ~once a minute (knob)
-        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-        if (m_lastKeyframeRequestMs == 0 || nowMs - m_lastKeyframeRequestMs >= kKeyframeIntervalMs)
-        {
-            rmgk_gekko::request_keyframe();
-            m_lastKeyframeRequestMs = nowMs;
-        }
-        std::vector<unsigned char> kf;
-        int kfFrame = -1;
-        if (rmgk_gekko::take_keyframe(kf, kfFrame) && !kf.empty() && kfFrame >= 0)
-        {
-            m_client->sendBroadcastKeyframe(m_broadcastMatchId,
-                QByteArray(reinterpret_cast<const char*>(kf.data()), static_cast<int>(kf.size())),
-                kfFrame);
-        }
+        rmgk_gekko::request_keyframe();
+        m_lastKeyframeRequestMs = nowMs;
+    }
+    std::vector<unsigned char> kf;
+    int kfFrame = -1;
+    if (rmgk_gekko::take_keyframe(kf, kfFrame) && !kf.empty() && kfFrame >= 0)
+    {
+        m_client->sendBroadcastKeyframe(m_broadcastMatchId,
+            QByteArray(reinterpret_cast<const char*>(kf.data()), static_cast<int>(kf.size())),
+            kfFrame);
     }
 }
 
@@ -4466,6 +4461,7 @@ void RollbackLobbyDialog::stopSpectating()
     m_client->stopSpectate(m_spectatingMatchId);
     m_spectatingMatchId = 0;
     m_spectateStreamArmed = false;
+    emit liveReplayViewerCountCleared();
 }
 
 void RollbackLobbyDialog::onSpectateBegan(quint64 matchId)
@@ -4477,11 +4473,11 @@ void RollbackLobbyDialog::onSpectateBegan(quint64 matchId)
     appendChatSystemLine(CHANNEL_LOBBY, "Watching — buffering the match…");
 }
 
-void RollbackLobbyDialog::onSpectateData(quint64 matchId, const QByteArray& bytes, int liveFrame)
+void RollbackLobbyDialog::onSpectateData(quint64 matchId, const QByteArray& bytes, int liveFrame, qint64 offset)
 {
     if (matchId != m_spectatingMatchId) return;
     if (!m_spectateStreamArmed) return; // stale chunk from a previous watch — drop it
-    emit spectateStreamData(bytes, liveFrame);
+    emit spectateStreamData(bytes, liveFrame, offset);
 }
 
 void RollbackLobbyDialog::onSpectateKeyframe(quint64 matchId, int frame, const QByteArray& savestate)
@@ -4495,6 +4491,7 @@ void RollbackLobbyDialog::onSpectateEnded(quint64 matchId, const QString& reason
 {
     if (matchId != m_spectatingMatchId) return;
     m_spectatingMatchId = 0; // server already ended it; don't echo SPECTATE_STOP
+    emit liveReplayViewerCountCleared();
     emit spectateStreamClosed(reason);
 }
 
@@ -4502,12 +4499,25 @@ void RollbackLobbyDialog::onSpectateFailed(quint64 matchId, const QString& reaso
 {
     if (matchId != m_spectatingMatchId) return;
     m_spectatingMatchId = 0;
+    emit liveReplayViewerCountCleared();
     const QString human =
         reason == "not_broadcasting" ? QStringLiteral("That live replay isn't available anymore.") :
         reason == "ended"            ? QStringLiteral("That live replay just ended.") :
                                        QStringLiteral("Couldn't watch: %1").arg(reason);
     QMessageBox::information(this, "Live Replay", human);
     emit spectateStreamClosed(reason);
+}
+
+void RollbackLobbyDialog::onBroadcastViewerCount(quint64 matchId, int viewerCount)
+{
+    if (m_broadcasting && matchId == m_broadcastMatchId)
+    {
+        emit liveReplayViewerCountChanged(viewerCount, true);
+    }
+    else if (matchId == m_spectatingMatchId)
+    {
+        emit liveReplayViewerCountChanged(viewerCount, false);
+    }
 }
 
 void RollbackLobbyDialog::abortMatchStart(const QString& reason)
